@@ -1011,3 +1011,42 @@ def test_should_bypass_proxies_win_registry_ProxyOverride_value(monkeypatch):
     monkeypatch.setattr(winreg, "OpenKey", OpenKey)
     monkeypatch.setattr(winreg, "QueryValueEx", QueryValueEx)
     assert should_bypass_proxies("http://example.com/", None) is False
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Test only on Windows")
+def test_proxy_bypass_registry_does_not_match_host_suffixes(monkeypatch):
+    """A registry override must match the whole host, not just its prefix.
+
+    ``re.match`` only anchors the start, so an override for ``google.com`` used
+    to also bypass ``google.com.evil.com``, letting an attacker-influenced
+    hostname escape the proxy meant to inspect its traffic.
+    """
+    import winreg
+
+    from requests.utils import proxy_bypass_registry
+
+    class RegHandle:
+        def Close(self):
+            pass
+
+    ie_settings = RegHandle()
+
+    def OpenKey(key, subkey):
+        return ie_settings
+
+    def QueryValueEx(key, value_name):
+        if key is ie_settings:
+            if value_name == "ProxyEnable":
+                return [1]
+            elif value_name == "ProxyOverride":
+                return ["google.com;*.example.net"]
+
+    monkeypatch.setattr(winreg, "OpenKey", OpenKey)
+    monkeypatch.setattr(winreg, "QueryValueEx", QueryValueEx)
+
+    # An exact host, and a glob wildcard, still bypass.
+    assert proxy_bypass_registry("google.com") is True
+    assert proxy_bypass_registry("a.example.net") is True
+    # A host that merely ends with the override must not bypass.
+    assert proxy_bypass_registry("google.com.evil.com") is False
+    assert proxy_bypass_registry("notgoogle.com") is False
